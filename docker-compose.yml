@@ -1,0 +1,191 @@
+version: "3.0"
+
+services:
+  zookeeper:
+    container_name: "local-dev-zookeeper"
+    image: confluentinc/cp-zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ALLOW_ANONYMOUS_LOGIN: yes
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_CLIENT_PORT: 2181
+    logging:
+      driver: none
+    volumes:
+      - ./zookeeper_data:/var/lib/zookeeper
+    networks:
+      - local_network_v1
+
+  kafka:
+    image: confluentinc/cp-kafka
+    container_name: "local-dev-kafka"
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9093,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_CONFLUENT_LICENSE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CONFLUENT_BALANCER_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+      KAFKA_CONFLUENT_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONFLUENT_SUPPORT_CUSTOMER_ID: 'anonymous'
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    logging:
+      driver: none
+    volumes:
+      - ./kafka-data:/var/lib/kafka
+    networks:
+      - local_network_v1
+
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui
+    container_name: kafka-ui
+    ports:
+      - "8180:8180"
+    restart: on-failure
+    environment:
+      - DYNAMIC_CONFIG_ENABLED=true
+      - KAFKA_CLUSTERS_0_NAME=local
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:9093
+      - KAFKA_CLUSTERS_0_ZOOKEEPER=localhost:2181
+    networks:   # Connect to the network where Kafka and Zookeeper reside
+      - local_network_v1
+
+
+  elasticsearch:
+    container_name: "elastic-search"
+    image: "elasticsearch:7.16.1"
+    ports:
+      - "9200:9200"
+    restart: always
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    environment:
+      - "discovery.type=single-node"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+
+  kibana:
+    depends_on:
+      - elasticsearch
+    image: "kibana:7.16.1"
+    container_name: kibana
+    volumes:
+      - kibana-data:/usr/share/kibana/data
+    ports:
+      - 5601:5601
+    restart: always
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+
+  apm-server:
+    depends_on:
+      - elasticsearch
+    image: "docker.elastic.co/apm/apm-server:7.16.1"
+    container_name: apm-server
+    ports:
+      - "8200:8200"
+    restart: always
+    volumes:
+      - apm-server-config:/usr/share/apm-server/config
+    environment:
+      - OUTPUT_ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - KIBANA_HOST=kibana:5601
+      - ELASTICSEARCH_USERNAME=superuser
+      - ELASTICSEARCH_PASSWORD=password
+
+  dynamodb:
+    container_name: "dynamoDB"
+    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath ./data"
+    image: "amazon/dynamodb-local:latest"
+    ports:
+      - "8000:8000"
+    volumes:
+      - "./docker/dynamodb:/home/dynamodblocal/data"
+    working_dir: /home/dynamodblocal
+    environment:
+      IN_MEMORY: "true"
+      AWS_ACCESS_KEY_ID: root
+      AWS_SECRET_ACCESS_KEY: pass
+      AWS_REGION: ap-south-1
+    networks:
+      - local_network_v1
+
+  dynamodb-admin:
+    container_name: "dynamodb-admin-ui"
+    image: 'aaronshaf/dynamodb-admin'
+    ports:
+      - "8001:8001"
+    environment:
+      AWS_REGION: "ap-south-1"
+      AWS_ACCESS_KEY_ID: root
+      AWS_SECRET_ACCESS_KEY: pass
+      DYNAMO_ENDPOINT: "http://dynamoDB:8000"
+    depends_on:
+      - dynamodb
+    networks:
+      - local_network_v1
+
+  postgresdb:
+    container_name: "aryan-dev-postgres"
+    image: "postgres:14.1-alpine"
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=co_lending_platform
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=admin
+    volumes:
+      - ~/data/postgresdb:/data/postgresdb
+    logging:
+      driver: none
+    networks:
+      - local_network_v1
+
+  ssanghvi-dev:
+    container_name: "ssanghvi-dev-test-app"
+    depends_on:
+      - kafka
+      - postgresdb
+    image: "maven:3-jdk-11"
+    ports:
+      - "9999:9999"
+    environment:
+      - POSTGRES_DB_URL=jdbc:postgresql://postgresdb:5432/co_lending_platform
+      - POSTGRES_DB_USERNAME=postgres
+      - POSTGRES_DB_PASSWORD=admin
+    volumes:
+      - .:/app
+    working_dir: /app
+    networks:
+      - local_network_v1
+    command: mvn clean verify test
+
+networks:
+  local_network_v1:
+    driver: bridge
+
+volumes:
+  elasticsearch-data:
+    driver: local
+  kibana-data:
+    driver: local
+  apm-server-config:
+    driver: local
+  kafka-data:
+    driver: local
+
